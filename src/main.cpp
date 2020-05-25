@@ -55,25 +55,24 @@ int main()
     map_waypoints_dy.push_back(d_y);
   }
 
+  int lane{1};
+  auto velocity{.98 * 50 / 2.24};
+
   h.onMessage([&map_waypoints_x,
                &map_waypoints_y,
                &map_waypoints_s,
                &map_waypoints_dx,
-               &map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
-                                  uWS::OpCode opCode) {
+               &map_waypoints_dy,
+               &lane,
+               &velocity](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+                          uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
 
-    auto max_v{50 / 2.24};
-    auto max_a{10.};
-    auto max_j{10.};
+    auto max_v{50. / 2.24};
     auto dT{0.02};
     auto N{50};
-
-    int lane = 1;
-
-    auto ref_vel = .95 * max_v;
 
     if (length && length > 2 && data[0] == '4' && data[1] == '2')
     {
@@ -109,27 +108,6 @@ int main()
           //   of the road.
           auto sensor_fusion = j[1]["sensor_fusion"];
 
-          vector<vector<vector<double>>> vehicles(3, vector<vector<double>>());
-          for (const auto &v : sensor_fusion)
-          {
-            const double d{v[6]};
-            const auto lane{static_cast<int>(round((d - 2.) / 4.))};
-            if (lane >= 0)
-            {
-              vehicles[lane].push_back(v);
-            }
-          }
-
-          if (isVehicleTTCCritical(vehicles[1], car_s, car_speed))
-          {
-            lane = 0;
-          }
-          else
-          {
-            lane = 1;
-          }
-          std::cout << lane << std::endl;
-
           json msgJson;
 
           vector<double> next_x_vals;
@@ -140,15 +118,15 @@ int main()
            *   sequentially every .02 seconds
            */
 
-          if (.98 * max_v - car_speed > 2.)
-          {
-            ref_vel = car_speed + 2.;
-          }
-          else
-          {
-            ref_vel = .98 * max_v;
-          }
+          const auto vehicles{getOrderedVehicles(sensor_fusion)};
 
+          const auto reference{getReference(vehicles, lane, car_s, car_speed)};
+          lane = std::get<0>(reference);
+          velocity = std::get<1>(reference);
+
+          const auto ref_vel{getControlVelocityFromReference(velocity, car_speed)};
+
+          // Section taken from David's and Aaron's Q&A Session
           int prev_size = previous_path_x.size();
 
           vector<double> ptsx;
@@ -185,9 +163,9 @@ int main()
             ptsy.push_back(ref_y);
           }
 
-          vector<double> next_wp0 = getXY(car_s + 60., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-          vector<double> next_wp1 = getXY(car_s + 120., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-          vector<double> next_wp2 = getXY(car_s + 180., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp0 = getXY(car_s + (.25 + .75 * car_speed / max_v) * 60., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp1 = getXY(car_s + (.25 + .75 * car_speed / max_v) * 120., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp2 = getXY(car_s + (.25 + .75 * car_speed / max_v) * 180., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
           ptsx.push_back(next_wp0[0]);
           ptsx.push_back(next_wp1[0]);
@@ -221,9 +199,9 @@ int main()
 
           double x_add_on = 0.;
 
-          for (int i = 0; i < 50 - prev_size; ++i)
+          for (int i = 0; i < N - prev_size; ++i)
           {
-            double N = target_dist / (.02 * ref_vel);
+            double N = target_dist / (dT * ref_vel);
             double x_point = x_add_on + target_x / N;
             double y_point = s(x_point);
 
@@ -241,6 +219,7 @@ int main()
             next_x_vals.push_back(x_point);
             next_y_vals.push_back(y_point);
           }
+          // End of the section
 
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
@@ -259,7 +238,8 @@ int main()
     } // end websocket if
   }); // end h.onMessage
 
-  h.onConnection([&h](uWS::WebSocket<uWS::SERVER> ws, uWS::HttpRequest req) {
+  h.onConnection([&h, &lane](uWS::WebSocket<uWS::SERVER> ws, uWS::HttpRequest req) {
+    lane = 1;
     std::cout << "Connected!!!" << std::endl;
   });
 

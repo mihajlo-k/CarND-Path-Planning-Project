@@ -172,11 +172,8 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s,
   return {x, y};
 }
 
-bool isVehicleInDangerousArea(const vector<vector<double>> vehicles, const double car_s)
+bool isVehicleInArea(const vector<vector<double>> &vehicles, const double car_s, const double s_lower, const double s_upper)
 {
-  const auto s_lower{-10.};
-  const auto s_upper{30.};
-
   for (const auto &v : vehicles)
   {
     const auto s{v[5] - car_s};
@@ -189,19 +186,26 @@ bool isVehicleInDangerousArea(const vector<vector<double>> vehicles, const doubl
   return false;
 }
 
-bool isVehicleTTCCritical(const vector<vector<double>> vehicles, const double car_s, const double car_v)
+bool isVehicleInCriticalArea(const vector<vector<double>> &vehicles, const double car_s)
 {
-  const auto ttc_min{1. / 5.};
+  return isVehicleInArea(vehicles, car_s, -10., 15.);
+}
 
+bool isVehicleInDangerousArea(const vector<vector<double>> &vehicles, const double car_s)
+{
+  return isVehicleInArea(vehicles, car_s, -10., 30.);
+}
+
+bool isVehicleTTCBelowThreshold(const vector<vector<double>> &vehicles, const double car_s, const double car_v, const double ttc_min)
+{
   for (const auto &v : vehicles)
   {
     const auto v_rel{sqrt(v[3] * v[3] + v[4] * v[4]) - car_v};
     const auto s{v[5] - car_s};
     if (abs(s) > 1E-6)
     {
-      const auto ttc{-v_rel / s};
-      std::cout << "ttc: " << 1. / ttc << std::endl;
-      if (ttc > ttc_min)
+      const auto ttc{-s / v_rel};
+      if (1. / ttc > 1. / ttc_min)
       {
         return true;
       }
@@ -209,6 +213,196 @@ bool isVehicleTTCCritical(const vector<vector<double>> vehicles, const double ca
   }
 
   return false;
+}
+
+bool isVehicleTTCCritical(const vector<vector<double>> &vehicles, const double car_s, const double car_v)
+{
+  return isVehicleTTCBelowThreshold(vehicles, car_s, car_v, 5.);
+}
+
+bool isLaneInRange(const int lane)
+{
+  return lane >= 0 and lane <= 2;
+}
+
+bool isLaneValidForLaneChange(const int lane, const vector<vector<double>> &vehicles, const double car_s, const double car_v)
+{
+  return isLaneInRange(lane) and !isVehicleInDangerousArea(vehicles, car_s) and !isVehicleTTCCritical(vehicles, car_s, car_v);
+}
+
+double getVehicleTTC(const vector<double> &vehicle, const double car_s, const double car_v)
+{
+  if (vehicle.size() == 0)
+  {
+    return 1E9;
+  }
+  const double v_rel{sqrt(vehicle[3] * vehicle[3] + vehicle[4] * vehicle[4]) - car_v};
+  const double s_rel{vehicle[5] - car_s};
+  if (v_rel == 0)
+  {
+    return 1E9;
+  }
+  return -s_rel / v_rel;
+}
+
+vector<vector<vector<double>>> getOrderedVehicles(const vector<vector<double>> &unordered_vehicles)
+{
+  vector<vector<vector<double>>> vehicles(3, vector<vector<double>>());
+  for (const auto &v : unordered_vehicles)
+  {
+    const double d{v[6]};
+    const auto lane{static_cast<int>(round((d - 2.) / 4.))};
+    if (lane >= 0)
+    {
+      vehicles[lane].push_back(v);
+    }
+  }
+
+  return vehicles;
+}
+
+vector<double> getVehicleInFront(const vector<vector<double>> &vehicles, const double car_s)
+{
+  if (0 == vehicles.size())
+  {
+    return {};
+  }
+  auto min_s{99999.};
+  auto min_veh{vehicles[0]};
+  auto vehicle_found{false};
+  for (const auto &veh : vehicles)
+  {
+    const auto s_diff{veh[5] - car_s};
+    if (s_diff > 0. and s_diff < min_s)
+    {
+      min_s = s_diff;
+      min_veh = veh;
+      vehicle_found = true;
+    }
+  }
+  if (vehicle_found)
+  {
+    return min_veh;
+  }
+  else
+  {
+    return {};
+  }
+}
+
+int getFreeLaneForDoubleLaneChange(const vector<vector<vector<double>>> &vehicles, const int lane, const double car_s, const double car_v)
+{
+  if (lane == 0 and
+      !isVehicleInCriticalArea(vehicles[1], car_s) and
+      !isVehicleTTCCritical(vehicles[1], car_s, car_v) and
+      !isVehicleInDangerousArea(vehicles[2], car_s) and
+      !isVehicleTTCCritical(vehicles[2], car_s, car_v))
+  {
+    return 2;
+  }
+  else if (lane == 2 and
+           !isVehicleInCriticalArea(vehicles[1], car_s) and
+           !isVehicleTTCCritical(vehicles[1], car_s, car_v) and
+           !isVehicleInDangerousArea(vehicles[0], car_s) and
+           !isVehicleTTCCritical(vehicles[0], car_s, car_v))
+  {
+    return 0;
+  }
+
+  return lane;
+}
+
+int getFreeLaneForLaneChange(const vector<vector<vector<double>>> &vehicles, const int lane, const double car_s, const double car_v)
+{
+  int lane_to_switch{lane};
+
+  const int lane_left{lane - 1};
+  const int lane_right{lane + 1};
+
+  const auto lane_left_valid{isLaneValidForLaneChange(lane_left, vehicles[lane_left], car_s, car_v)};
+  const auto lane_right_valid{isLaneValidForLaneChange(lane_right, vehicles[lane_right], car_s, car_v)};
+
+  if (lane_left_valid and lane_right_valid)
+  {
+    const double ttc_left{getVehicleTTC(getVehicleInFront(vehicles[lane_left], car_s), car_s, car_v)};
+    const double ttc_right{getVehicleTTC(getVehicleInFront(vehicles[lane_right], car_s), car_s, car_v)};
+
+    lane_to_switch = (ttc_left >= ttc_right) ? lane_left : lane_right;
+  }
+  else if (lane_left_valid)
+  {
+    lane_to_switch = lane_left;
+  }
+  else if (lane_right_valid)
+  {
+    lane_to_switch = lane_right;
+  }
+  else
+  {
+    lane_to_switch = getFreeLaneForDoubleLaneChange(vehicles, lane, car_s, car_v);
+  }
+
+  return lane_to_switch;
+}
+
+std::pair<int, double> getReference(const vector<vector<vector<double>>> &vehicles, const int lane, const double car_s, const double car_v)
+{
+  const auto lane_to_switch{getFreeLaneForLaneChange(vehicles, lane, car_s, car_v)};
+  const auto vehicle_in_front{getVehicleInFront(vehicles[lane], car_s)};
+
+  int lane_ref{lane};
+  double v_ref{0.};
+
+  if (vehicle_in_front.size())
+  {
+    const double v{sqrt(vehicle_in_front[3] * vehicle_in_front[3] + vehicle_in_front[4] * vehicle_in_front[4])};
+    const double s_rel{vehicle_in_front[5] - car_s};
+    const double ttc{getVehicleTTC(vehicle_in_front, car_s, car_v)};
+
+    if (1. / ttc > 1. / 5. or s_rel < 30.)
+    {
+      if (lane_to_switch != lane)
+      {
+        lane_ref = lane_to_switch;
+      }
+      else
+      {
+        v_ref = ((s_rel < 20.) ? .75 : 1.) * v;
+      }
+      if (1. / ttc > 1. / .5)
+      {
+        v_ref = 0.;
+      }
+    }
+    else
+    {
+      v_ref = .98 * 50. / 2.24;
+    }
+  }
+  else
+  {
+    v_ref = .98 * 50. / 2.24;
+  }
+
+  return {lane_ref, v_ref};
+}
+
+double getControlVelocityFromReference(const double ref_v, const double car_v)
+{
+  const auto diff_vel{ref_v - car_v};
+  if (fabs(diff_vel) > .7)
+  {
+    if (diff_vel > 0.)
+    {
+      return car_v + .7;
+    }
+    else
+    {
+      return car_v - .7;
+    }
+  }
+
+  return car_v;
 }
 
 #endif // HELPERS_H
