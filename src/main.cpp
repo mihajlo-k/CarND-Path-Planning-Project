@@ -55,6 +55,7 @@ int main()
     map_waypoints_dy.push_back(d_y);
   }
 
+  // desired lane and velocity are tracked and updated
   int lane{1};
   auto velocity{.98 * 50 / 2.24};
 
@@ -94,8 +95,8 @@ int main()
           double car_y = j[1]["y"];
           double car_s = j[1]["s"];
           double car_d = j[1]["d"];
-          double car_yaw = deg2rad(static_cast<double>(j[1]["yaw"]));
-          double car_speed = static_cast<double>(j[1]["speed"]) / 2.24;
+          double car_yaw = deg2rad(static_cast<double>(j[1]["yaw"]));   // convert directly to radians
+          double car_speed = static_cast<double>(j[1]["speed"]) / 2.24; // convert directly to mps
 
           // Previous path data given to the Planner
           auto previous_path_x = j[1]["previous_path_x"];
@@ -118,28 +119,37 @@ int main()
            *   sequentially every .02 seconds
            */
 
+          // get 3 lists of objects. each one contains the objects assigned to one of the lanes
           const auto vehicles{getOrderedVehicles(sensor_fusion)};
 
+          // core of the planning algorithm. reference is updated
           const auto reference{getReference(vehicles, lane, car_s, car_speed)};
           lane = std::get<0>(reference);
           velocity = std::get<1>(reference);
 
+          // generate the velocity that the car will follow in order to reach desired velocity
           const auto ref_vel{getControlVelocityFromReference(velocity, car_speed)};
 
-          // Section taken from David's and Aaron's Q&A Session
-          int prev_size = previous_path_x.size();
+          ///////////////////////////////////////////////////////////
+          //                                                       //
+          // Trajectory generator                                  //
+          // Section taken from David's and Aaron's Q&A Session    //
+          //                                                       //
+          ///////////////////////////////////////////////////////////
+
+          const auto prev_size{previous_path_x.size()};
 
           vector<double> ptsx;
           vector<double> ptsy;
 
-          double ref_x = car_x;
-          double ref_y = car_y;
-          double ref_yaw = car_yaw;
+          double ref_x{car_x};
+          double ref_y{car_y};
+          double ref_yaw{car_yaw};
 
           if (prev_size < 2)
           {
-            double prev_car_x = car_x - cos(car_yaw);
-            double prev_car_y = car_y - sin(car_yaw);
+            const auto prev_car_x{car_x - cos(car_yaw)};
+            const auto prev_car_y{car_y - sin(car_yaw)};
 
             ptsx.push_back(prev_car_x);
             ptsx.push_back(car_x);
@@ -152,8 +162,8 @@ int main()
             ref_x = previous_path_x[prev_size - 1];
             ref_y = previous_path_y[prev_size - 1];
 
-            double ref_x_prev = previous_path_x[prev_size - 2];
-            double ref_y_prev = previous_path_y[prev_size - 2];
+            const double ref_x_prev{previous_path_x[prev_size - 2]};
+            const double ref_y_prev{previous_path_y[prev_size - 2]};
             ref_yaw = atan2(ref_y - ref_y_prev, ref_x - ref_x_prev);
 
             ptsx.push_back(ref_x_prev);
@@ -163,9 +173,9 @@ int main()
             ptsy.push_back(ref_y);
           }
 
-          vector<double> next_wp0 = getXY(car_s + (.25 + .75 * car_speed / max_v) * 60., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-          vector<double> next_wp1 = getXY(car_s + (.25 + .75 * car_speed / max_v) * 120., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-          vector<double> next_wp2 = getXY(car_s + (.25 + .75 * car_speed / max_v) * 180., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          const vector<double> next_wp0{getXY(car_s + (.25 + .75 * car_speed / max_v) * 60., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y)};
+          const vector<double> next_wp1{getXY(car_s + (.25 + .75 * car_speed / max_v) * 120., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y)};
+          const vector<double> next_wp2{getXY(car_s + (.25 + .75 * car_speed / max_v) * 180., 2. + 4. * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y)};
 
           ptsx.push_back(next_wp0[0]);
           ptsx.push_back(next_wp1[0]);
@@ -175,10 +185,10 @@ int main()
           ptsy.push_back(next_wp1[1]);
           ptsy.push_back(next_wp2[1]);
 
-          for (int i = 0; i < ptsx.size(); ++i)
+          for (int i{0}; i < ptsx.size(); ++i)
           {
-            double shift_x = ptsx[i] - ref_x;
-            double shift_y = ptsy[i] - ref_y;
+            const auto shift_x{ptsx[i] - ref_x};
+            const auto shift_y{ptsy[i] - ref_y};
 
             ptsx[i] = shift_x * cos(-ref_yaw) - shift_y * sin(-ref_yaw);
             ptsy[i] = shift_x * sin(-ref_yaw) + shift_y * cos(-ref_yaw);
@@ -187,28 +197,28 @@ int main()
           tk::spline s;
           s.set_points(ptsx, ptsy);
 
-          for (int i = 0; i < prev_size; ++i)
+          for (int i{0}; i < prev_size; ++i)
           {
             next_x_vals.push_back(previous_path_x[i]);
             next_y_vals.push_back(previous_path_y[i]);
           }
 
-          double target_x = 30.;
-          double target_y = s(target_x);
-          double target_dist = sqrt(target_x * target_x + target_y * target_y);
+          const auto target_x{30.};
+          const auto target_y{s(target_x)};
+          const auto target_dist{sqrt(target_x * target_x + target_y * target_y)};
 
-          double x_add_on = 0.;
+          auto x_add_on{0.};
 
-          for (int i = 0; i < N - prev_size; ++i)
+          for (int i{0}; i < N - prev_size; ++i)
           {
-            double N = target_dist / (dT * ref_vel);
-            double x_point = x_add_on + target_x / N;
-            double y_point = s(x_point);
+            const auto N{target_dist / (dT * ref_vel)};
+            auto x_point{x_add_on + target_x / N};
+            auto y_point{s(x_point)};
 
             x_add_on = x_point;
 
-            double x_ref = x_point;
-            double y_ref = y_point;
+            const auto x_ref{x_point};
+            const auto y_ref{y_point};
 
             x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
             y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
@@ -219,7 +229,7 @@ int main()
             next_x_vals.push_back(x_point);
             next_y_vals.push_back(y_point);
           }
-          // End of the section
+          // END of Trajectory generator
 
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;

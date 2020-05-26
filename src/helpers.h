@@ -172,6 +172,9 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s,
   return {x, y};
 }
 
+/**
+ * Checks if any vehicles are is in given area
+ */
 bool isVehicleInArea(const vector<vector<double>> &vehicles, const double car_s, const double s_lower, const double s_upper)
 {
   for (const auto &v : vehicles)
@@ -186,16 +189,27 @@ bool isVehicleInArea(const vector<vector<double>> &vehicles, const double car_s,
   return false;
 }
 
+/**
+ * Checks if any vehicles are in critical area.
+ * this is used to check if the lane is fit to be transision lane in the case of double lane change
+ */
 bool isVehicleInCriticalArea(const vector<vector<double>> &vehicles, const double car_s)
 {
   return isVehicleInArea(vehicles, car_s, -10., 15.);
 }
 
+/**
+ * Checks if any vehicles are in critical area.
+ * this is used to check if the lane is fit to be driven on
+ */
 bool isVehicleInDangerousArea(const vector<vector<double>> &vehicles, const double car_s)
 {
   return isVehicleInArea(vehicles, car_s, -10., 30.);
 }
 
+/**
+ * Checks if any vehicle TTC is below threshold.
+ */
 bool isVehicleTTCBelowThreshold(const vector<vector<double>> &vehicles, const double car_s, const double car_v, const double ttc_min)
 {
   for (const auto &v : vehicles)
@@ -215,21 +229,34 @@ bool isVehicleTTCBelowThreshold(const vector<vector<double>> &vehicles, const do
   return false;
 }
 
+/**
+ * Checks if any vehicle TTC is critically low.
+ * this is used to check if the lane is fit to be driven on
+ */
 bool isVehicleTTCCritical(const vector<vector<double>> &vehicles, const double car_s, const double car_v)
 {
   return isVehicleTTCBelowThreshold(vehicles, car_s, car_v, 5.);
 }
 
+/**
+ * Checks if lane is on our roadway
+ */
 bool isLaneInRange(const int lane)
 {
   return lane >= 0 and lane <= 2;
 }
 
+/**
+ * Checks if lane is fit for lane change
+ */
 bool isLaneValidForLaneChange(const int lane, const vector<vector<double>> &vehicles, const double car_s, const double car_v)
 {
   return isLaneInRange(lane) and !isVehicleInDangerousArea(vehicles, car_s) and !isVehicleTTCCritical(vehicles, car_s, car_v);
 }
 
+/**
+ * Returns a TTC of a given vehicle
+ */
 double getVehicleTTC(const vector<double> &vehicle, const double car_s, const double car_v)
 {
   if (vehicle.size() == 0)
@@ -245,6 +272,9 @@ double getVehicleTTC(const vector<double> &vehicle, const double car_s, const do
   return -s_rel / v_rel;
 }
 
+/**
+ * Assigns objects to lanes
+ */
 vector<vector<vector<double>>> getOrderedVehicles(const vector<vector<double>> &unordered_vehicles)
 {
   vector<vector<vector<double>>> vehicles(3, vector<vector<double>>());
@@ -261,6 +291,9 @@ vector<vector<vector<double>>> getOrderedVehicles(const vector<vector<double>> &
   return vehicles;
 }
 
+/**
+ * Returns the closest vehicle in front for a given lane
+ */
 vector<double> getVehicleInFront(const vector<vector<double>> &vehicles, const double car_s)
 {
   if (0 == vehicles.size())
@@ -290,6 +323,9 @@ vector<double> getVehicleInFront(const vector<vector<double>> &vehicles, const d
   }
 }
 
+/**
+ * Returns the desired lane for double lane change if this maneuver is possible.
+ */
 int getFreeLaneForDoubleLaneChange(const vector<vector<vector<double>>> &vehicles, const int lane, const double car_s, const double car_v)
 {
   if (lane == 0 and
@@ -312,6 +348,11 @@ int getFreeLaneForDoubleLaneChange(const vector<vector<vector<double>>> &vehicle
   return lane;
 }
 
+/**
+ * Returns the desired lane for lane change if this maneuver is possible.
+ * If more than one lane is fit for lane change, the lane with the highest TTC is chosen.
+ * Double lane changes are avoided if single lane change is possible.
+ */
 int getFreeLaneForLaneChange(const vector<vector<vector<double>>> &vehicles, const int lane, const double car_s, const double car_v)
 {
   int lane_to_switch{lane};
@@ -345,6 +386,9 @@ int getFreeLaneForLaneChange(const vector<vector<vector<double>>> &vehicles, con
   return lane_to_switch;
 }
 
+/**
+ * Returns the desired lane and velocity
+ */
 std::pair<int, double> getReference(const vector<vector<vector<double>>> &vehicles, const int lane, const double car_s, const double car_v)
 {
   const auto lane_to_switch{getFreeLaneForLaneChange(vehicles, lane, car_s, car_v)};
@@ -387,19 +431,15 @@ std::pair<int, double> getReference(const vector<vector<vector<double>>> &vehicl
   return {lane_ref, v_ref};
 }
 
+/**
+ * Returns the velocity to be set to trajectory generator
+ */
 double getControlVelocityFromReference(const double ref_v, const double car_v)
 {
   const auto diff_vel{ref_v - car_v};
   if (fabs(diff_vel) > .7)
   {
-    if (diff_vel > 0.)
-    {
-      return car_v + .7;
-    }
-    else
-    {
-      return car_v - .7;
-    }
+    return car_v + .8 * ((diff_vel > 0.) ? 1. : -1.);
   }
 
   return car_v;
